@@ -1,54 +1,112 @@
+
+
+#define SDL_MAIN_HANDLED
+
 #include <GL/glew.h>
 #include <chrono>
 #include <thread>
 #include <exception>
 #include <glm/glm.hpp>
 #include "MyWindow.h"
+#include "Importer.h"
+#include "customFormatUtils.h"
+#include "FilesystemUtils.h"
+#include <IL/il.h>
+#include <IL/ilu.h>
+#include <IL/ilut.h>
+#include "FileExplorer.h"
+
 using namespace std;
-
 using hrclock = chrono::high_resolution_clock;
-using u8vec4 = glm::u8vec4;
 using ivec2 = glm::ivec2;
-using vec3 = glm::dvec3;
 
-static const ivec2 WINDOW_SIZE(512, 512);
+static const ivec2 WINDOW_SIZE(800, 600);
 static const unsigned int FPS = 60;
 static const auto FRAME_DT = 1.0s / FPS;
 
-static void init_openGL() {
-	glewInit();
-	if (!GLEW_VERSION_3_0) throw exception("OpenGL 3.0 API is not available.");
-	glEnable(GL_DEPTH_TEST);
-	glClearColor(0.5, 0.5, 0.5, 1.0);
-}
+Importer importer;
+Scene scene;
+MyWindow myWindow("SDL2 Simple Example", WINDOW_SIZE.x, WINDOW_SIZE.y);
+extern Explorer explorer;
 
-static void draw_triangle(const u8vec4& color, const vec3& center, double size) {
-	glColor4ub(color.r, color.g, color.b, color.a);
-	glBegin(GL_TRIANGLES);
-	glVertex3d(center.x, center.y + size, center.z);
-	glVertex3d(center.x - size, center.y - size, center.z);
-	glVertex3d(center.x + size, center.y - size, center.z);
-	glEnd();
-}
+void handleFileDrop(const char* filePath) {
+    std::string fileName = FileSystemUtils::getFileName(filePath);
 
-static void display_func() {
-	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-	draw_triangle(u8vec4(255, 0, 0, 255), vec3(0.0, 0.0, 0.0), 0.5);
+    // Procesar extensiones
+    size_t dotPos = fileName.find_last_of(".");
+    if (dotPos != std::string::npos) {
+        fileName = fileName.substr(0, dotPos);
+    }
+    std::string path(filePath);
+    std::string extension = path.substr(path.find_last_of('.') + 1);
+
+    if (extension == "fbx") {
+        if (importer.loadFBX(filePath)) {
+            scene.loadModelData(importer.getVertices(), importer.getUVs(), importer.getIndices(), fileName);
+
+            // Configurar textura checker si no está asignada
+
+            scene.checkerTextureID = importer.GenerateCheckerTexture();
+            
+            scene.setCheckerTexture(scene.checkerTextureID);
+        }
+    }
+    else if (extension == "png" || extension == "jpg") {
+        TextureData* texture = importer.loadTexture(filePath);
+        if (texture != nullptr) {
+            scene.setTexture(texture);
+        }
+    }
+
+    // Actualizar el contenido del directorio en la interfaz
+    explorer.UpdateDirectoryContents();
 }
 
 int main(int argc, char** argv) {
-	MyWindow window("SDL2 Simple Example", WINDOW_SIZE.x, WINDOW_SIZE.y);
 
-	init_openGL();
+    FileSystemUtils::GenerateRequiredDirectories();
+    
+    explorer.UpdateDirectoryContents(); // Cargar contenido inicial
+    importer.setWindow(&myWindow);
 
-	while(window.processEvents() && window.isOpen()) {
-		const auto t0 = hrclock::now();
-		display_func();
-		window.swapBuffers();
-		const auto t1 = hrclock::now();
-		const auto dt = t1 - t0;
-		if(dt<FRAME_DT) this_thread::sleep_for(FRAME_DT - dt);
-	}
+    myWindow.logMessage("Initializing SDL...");
+    if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        myWindow.logMessage("Error initializing SDL: " + std::string(SDL_GetError()));
+        return -1;
+    }
+    myWindow.logMessage("SDL initialized successfully.");
 
-	return 0;
+    myWindow.logMessage("Initializing DevIL...");
+    ilInit();
+    iluInit();
+    ilutRenderer(ILUT_OPENGL);
+    myWindow.logMessage("DevIL initialized successfully.");
+
+    myWindow.logMessage("Initializing OpenGL context...");
+    Renderer::initOpenGL(WINDOW_SIZE);
+    Renderer::setupProjection(45.0f, 1.0f, 0.1f, 1000.0f);
+    myWindow.logMessage("OpenGL context initialized.");
+    myWindow.setupFramebuffer();
+    myWindow.renderToFramebuffer();
+
+    SDL_EventState(SDL_DROPFILE, SDL_ENABLE);
+
+    handleFileDrop("Library/Meshes/BakerHouse.fbx");
+    handleFileDrop("Library/Textures/Baker_house.png");
+
+    while (myWindow.processEvents() && myWindow.isOpen()) {
+        auto start = hrclock::now();
+        
+        
+
+        myWindow.draw();
+        myWindow.swapBuffers();
+
+        auto elapsed = hrclock::now() - start;
+        std::this_thread::sleep_for(FRAME_DT - elapsed);
+    }
+
+    SDL_Quit();
+    myWindow.logMessage("Application terminated.");
+    return 0;
 }
